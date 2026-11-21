@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Drive Galerie</title>
+<style>
+  :root { --bg:#111; --card:#1c1c1e; --fg:#f2f2f2; --mute:#9a9aa0; --acc:#4c8dff; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  [hidden] { display:none !important; }
+  html,body { margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  button { font:inherit; color:inherit; background:#2c2c2e; border:0; border-radius:10px;
+    padding:10px 14px; cursor:pointer; }
+  button.primary { background:var(--acc); color:#fff; font-weight:600; }
+  button:disabled { opacity:.4; }
+  input[type=text] { width:100%; padding:12px; border-radius:10px; border:1px solid #3a3a3c;
+    background:#1c1c1e; color:var(--fg); font:inherit; }
+  .center { min-height:100dvh; display:flex; flex-direction:column; justify-content:center;
+    gap:14px; padding:24px; max-width:520px; margin:0 auto; }
+  .center h1 { margin:0; font-size:26px; }
+  .muted { color:var(--mute); font-size:14px; }
+  .link { background:none; padding:4px 0; color:var(--acc); font-size:14px; text-align:left; }
+
+  header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:8px;
+    padding:10px 12px; padding-top:calc(10px + env(safe-area-inset-top));
+    background:rgba(17,17,17,.92); backdrop-filter:blur(10px); border-bottom:1px solid #2a2a2c; }
+  header .title { flex:1; min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header button { padding:8px 12px; font-size:14px; }
+
+  /* Galerie: Bilder in voller Breite, NIE zugeschnitten */
+  #gallery { max-width:900px; margin:0 auto; padding:12px; display:flex; flex-direction:column; gap:14px;
+    padding-bottom:calc(40px + env(safe-area-inset-bottom)); }
+  figure { margin:0; background:var(--card); border-radius:12px; overflow:hidden; cursor:pointer; }
+  figure img { display:block; width:100%; height:auto; }
+  #status { text-align:center; color:var(--mute); padding:20px; }
+
+  /* Ordnerauswahl */
+  #crumbs { padding:12px; color:var(--mute); font-size:14px; }
+  .list { max-width:700px; margin:0 auto; padding:0 12px 40px; display:flex; flex-direction:column; gap:8px; }
+  .row { display:flex; align-items:center; gap:12px; text-align:left; width:100%; padding:14px;
+    background:var(--card); border-radius:12px; }
+  .row span.ic { font-size:20px; }
+  .row.pick { background:var(--acc); color:#fff; font-weight:600; justify-content:center; }
+
+  /* Vollbild-Ansicht */
+  #lb { position:fixed; inset:0; z-index:50; background:#000; display:flex; align-items:center; justify-content:center; }
+  #lbImg { width:100vw; height:100dvh; object-fit:contain; display:block; user-select:none; -webkit-user-drag:none; }
+  #lbClose { position:absolute; top:calc(10px + env(safe-area-inset-top)); right:10px; width:42px; height:42px;
+    border-radius:50%; background:rgba(0,0,0,.55); font-size:20px; padding:0; }
+  #lbCount { position:absolute; bottom:calc(12px + env(safe-area-inset-bottom)); left:0; right:0; text-align:center;
+    font-size:13px; color:#ccc; text-shadow:0 0 6px #000; pointer-events:none; }
+  #lbSpin { position:absolute; width:34px; height:34px; border:3px solid #444; border-top-color:#fff;
+    border-radius:50%; animation:sp 0.8s linear infinite; pointer-events:none; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- 1) Einrichtung: Client-ID -->
+<section id="v-setup" class="center" hidden>
+  <h1>Drive Galerie</h1>
+  <p class="muted">Einmalige Einrichtung: Trage deine Google OAuth Client-ID ein
+    (Google Cloud Console &rarr; Anmeldedaten &rarr; OAuth-Client-ID &rarr; Webanwendung).
+    Als „Autorisierte JavaScript-Quelle“ muss die Adresse dieser Seite eingetragen sein.</p>
+  <input type="text" id="cidInput" placeholder="1234-abcd.apps.googleusercontent.com" autocapitalize="off" autocorrect="off">
+  <button class="primary" id="cidSave">Speichern</button>
+</section>
+
+<!-- 2) Login -->
+<section id="v-login" class="center" hidden>
+  <h1>Drive Galerie</h1>
+  <p class="muted">Verbinde dein Google Drive (nur Lesezugriff), wähle einen Ordner und sieh die Bilder groß und ungeschnitten.</p>
+  <button class="primary" id="loginBtn">Mit Google Drive verbinden</button>
+  <div id="loginErr" class="muted"></div>
+  <button class="link" id="cidChange">Client-ID ändern</button>
+</section>
+
+<!-- 3) Ordnerauswahl -->
+<section id="v-browse" hidden>
+  <header>
+    <button id="browseBack">&larr;</button>
+    <div class="title">Ordner wählen</div>
+    <button id="browseCancel" hidden>Abbrechen</button>
+  </header>
+  <div id="crumbs"></div>
+  <div class="list" id="folderList"></div>
+</section>
+
+<!-- 4) Galerie -->
+<section id="v-gallery" hidden>
+  <header>
+    <div class="title" id="galTitle"></div>
+    <button id="changeFolder">Ordner</button>
+    <button id="logout">Abmelden</button>
+  </header>
+  <div id="gallery"></div>
+  <div id="status"></div>
+  <div id="sentinel" style="height:1px"></div>
+</section>
+
+<!-- Vollbild -->
+<div id="lb" hidden>
+  <img id="lbImg" alt="">
+  <div id="lbSpin"></div>
+  <button id="lbClose" aria-label="Schließen">&#10005;</button>
+  <div id="lbCount"></div>
+</div>
+
+<script>
+/* Optional: Client-ID hier fest eintragen, dann entfällt die Eingabemaske. */
+window.CLIENT_ID = "";
+
+const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+const API = "https://www.googleapis.com/drive/v3";
+const FOLDER_MIME = "application/vnd.google-apps.folder";
+const $ = id => document.getElementById(id);
+const store = {
+  get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){} },
+  del(k){ try { localStorage.removeItem(k); } catch(e){} }
+};
+
+let clientId = "", token = null, tokenExp = 0, tokenClient = null;
+let gisResolve; const gisReady = new Promise(r => gisResolve = r);
+function onGis(){ gisResolve(); }
+
+function show(name){
+  for (const v of ["setup","login","browse","gallery"]) $("v-"+v).hidden = (v !== name);
+  window.scrollTo(0,0);
+}
+
+/* ---------- Auth ---------- */
+function getToken(interactive){
+  return new Promise((resolve, reject) => {
+    if (token && Date.now() < tokenExp - 60000) return resolve(token);
+    if (!window.google || !google.accounts) return reject(new Error("Google-Skript nicht geladen"));
+    if (!tokenClient) {
+      tokenClient = google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: SCOPE, callback: () => {} });
+    }
+    let done = false;
+    const timer = setTimeout(() => { if(!done){ done = true; reject(new Error("timeout")); } }, interactive ? 120000 : 8000);
+    tokenClient.callback = r => {
+      if (done) return; done = true; clearTimeout(timer);
+      if (r.error) return reject(new Error(r.error_description || r.error));
+      token = r.access_token; tokenExp = Date.now() + (r.expires_in||3600)*1000;
+      store.set("hasAuth","1");
+      resolve(token);
+    };
+    tokenClient.error_callback = e => {
+      if (done) return; done = true; clearTimeout(timer);
+      reject(new Error(e && e.type || "Anmeldung fehlgeschlagen"));
+    };
+    tokenClient.requestAccessToken({ prompt: interactive ? "" : "none" });
+  });
+}
+
+async function api(path, params, retry = true){
+  const t = await getToken(false);
+  const u = new URL(API + path);
+  Object.entries(params||{}).forEach(([k,v]) => u.searchParams.set(k,v));
+  u.searchParams.set("supportsAllDrives","true");
+  u.searchParams.set("includeItemsFromAllDrives","true");
+  const r = await fetch(u, { headers: { Authorization: "Bearer " + t } });
+  if (r.status === 401 && retry) { token = null; return api(path, params, false); }
+  if (!r.ok) throw new Error("Drive-Fehler " + r.status);
+  return r.json();
+}
+
+/* ---------- Start ---------- */
+async function start(){
+  clientId = window.CLIENT_ID || new URLSearchParams(location.search).get("cid") || store.get("cid") || "";
+  if (!clientId) return show("setup");
+  show("login");
+  await gisReady;
+  if (store.get("hasAuth")) {
+    try { await getToken(false); return afterLogin(); } catch(e) { /* manuell anmelden */ }
+  }
+}
+
+function afterLogin(){
+  let last = null;
+  try { last = JSON.parse(store.get("folder")); } catch(e){}
+  if (last && last.id) loadGallery(last); else openBrowser(false);
+}
+
+$("cidSave").onclick = () => {
+  const v = $("cidInput").value.trim();
+  if (!v) return;
+  store.set("cid", v); location.reload();
+};
+$("cidChange").onclick = () => { store.del("cid"); store.del("hasAuth"); location.reload(); };
+$("loginBtn").onclick = async () => {
+  $("loginErr").textContent = "";
+  try { await gisReady; await getToken(true); afterLogin(); }
+  catch(e){ $("loginErr").textContent = "Anmeldung nicht möglich: " + e.message; }
+};
+$("logout").onclick = () => {
+  try { if (token) google.accounts.oauth2.revoke(token, () => {}); } catch(e){}
+  token = null; store.del("hasAuth"); store.del("folder"); show("login");
+};
+
+/* ---------- Ordnerauswahl ---------- */
+let stack = [];
+async function openBrowser(canCancel){
+  stack = [{ id:"root", name:"Meine Ablage" }];
+  $("browseCancel").hidden = !canCancel;
+  show("browse");
+  renderFolders();
+}
+$("browseCancel").onclick = () => show("gallery");
+$("browseBack").onclick = () => {
+  if (stack.length > 1) { stack.pop(); renderFolders(); }
+};
+$("changeFolder").onclick = () => openBrowser(true);
+
+async function renderFolders(){
+  const cur = stack[stack.length-1];
+  const list = $("folderList");
+  $("crumbs").textContent = stack.map(s => s.name).join("  ›  ");
+  $("browseBack").disabled = stack.length <= 1;
+  list.innerHTML = '<div class="muted" style="padding:12px">Lade…</div>';
+  try {
+    const q = cur.id === "shared"
+      ? `sharedWithMe=true and mimeType='${FOLDER_MIME}' and trashed=false`
+      : `'${cur.id}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`;
+    let folders = [], pageToken = "";
+    do {
+      const p = { q, fields:"nextPageToken, files(id,name)", orderBy:"name_natural", pageSize:200 };
+      if (pageToken) p.pageToken = pageToken;
+      const res = await api("/files", p);
+      folders = folders.concat(res.files||[]); pageToken = res.nextPageToken;
+    } while (pageToken);
+
+    list.innerHTML = "";
+    if (cur.id !== "shared") {
+      const pick = document.createElement("button");
+      pick.className = "row pick";
+      pick.textContent = "✓ Diesen Ordner anzeigen";
+      pick.onclick = () => loadGallery({ id:cur.id, name:cur.name });
+      list.appendChild(pick);
+    }
+    if (cur.id === "root") {
+      list.appendChild(folderRow("Mit mir geteilt", () => { stack.push({id:"shared", name:"Mit mir geteilt"}); renderFolders(); }, "👥"));
+    }
+    folders.forEach(f => list.appendChild(folderRow(f.name, () => { stack.push({id:f.id, name:f.name}); renderFolders(); })));
+    if (!folders.length && cur.id !== "root") {
+      const e = document.createElement("div"); e.className = "muted"; e.style.padding = "8px 4px";
+      e.textContent = "Keine Unterordner."; list.appendChild(e);
+    }
+  } catch(e) {
+    list.innerHTML = "";
+    const d = document.createElement("div"); d.className = "muted"; d.style.padding = "12px";
+    d.textContent = "Fehler: " + e.message; list.appendChild(d);
+  }
+}
+function folderRow(name, fn, icon){
+  const b = document.createElement("button");
+  b.className = "row";
+  const i = document.createElement("span"); i.className = "ic"; i.textContent = icon || "📁";
+  const t = document.createElement("span"); t.textContent = name;
+  b.append(i, t); b.onclick = fn; return b;
+}
+
+/* ---------- Galerie ---------- */
+let items = [], nextPage = null, loading = false, folder = null, gen = 0;
+const blobCache = new Map();
+
+function thumb(f, size){
+  if (!f.thumbnailLink) return null;
+  return /=s\d+(-c)?$/.test(f.thumbnailLink) ? f.thumbnailLink.replace(/=s\d+(-c)?$/, "=s" + size) : f.thumbnailLink + "=s" + size;
+}
+async function blobUrl(f){
+  if (blobCache.has(f.id)) return blobCache.get(f.id);
+  const t = await getToken(false);
+  const r = await fetch(`${API}/files/${f.id}?alt=media&supportsAllDrives=true`, { headers:{ Authorization:"Bearer "+t } });
+  if (!r.ok) throw new Error("Download " + r.status);
+  const u = URL.createObjectURL(await r.blob());
+  blobCache.set(f.id, u); return u;
+}
+
+function loadGallery(f){
+  folder = f; store.set("folder", JSON.stringify(f));
+  gen++; items = []; nextPage = null;
+  $("gallery").innerHTML = ""; $("status").textContent = "";
+  $("galTitle").textContent = f.name;
+  show("gallery");
+  loadMore();
+}
+
+async function loadMore(){
+  if (loading) return;
+  if (items.length && !nextPage) return;
+  loading = true; const myGen = gen;
+  $("status").textContent = "Lade…";
+  try {
+    const p = {
+      q: `'${folder.id}' in parents and mimeType contains 'image/' and trashed=false`,
+      fields: "nextPageToken, files(id,name,mimeType,thumbnailLink,imageMediaMetadata(width,height,rotation))",
+      orderBy: "name_natural", pageSize: 30
+    };
+    if (nextPage) p.pageToken = nextPage;
+    const res = await api("/files", p);
+    if (myGen !== gen) return;
+    nextPage = res.nextPageToken || null;
+    addItems(res.files || []);
+    $("status").textContent = items.length ? (nextPage ? "" : items.length + " Bilder") : "Keine Bilder in diesem Ordner.";
+  } catch(e) {
+    $("status").textContent = "Fehler: " + e.message;
+  } finally { loading = false; }
+  /* Falls der Sentinel noch sichtbar ist, direkt weiterladen */
+  if (nextPage && $("sentinel").getBoundingClientRect().top < innerHeight * 2) loadMore();
+}
+
+function addItems(files){
+  const frag = document.createDocumentFragment();
+  for (const f of files) {
+    const idx = items.length; items.push(f);
+    const fig = document.createElement("figure");
+    const m = f.imageMediaMetadata;
+    if (m && m.width && m.height) {
+      const swap = m.rotation === 1 || m.rotation === 3;
+      fig.style.aspectRatio = swap ? `${m.height}/${m.width}` : `${m.width}/${m.height}`;
+    } else fig.style.minHeight = "50vw";
+    const img = new Image();
+    img.alt = f.name; img.decoding = "async"; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+    img.onload = () => { fig.style.aspectRatio = ""; fig.style.minHeight = ""; };
+    img.onerror = async () => {
+      img.onerror = null;
+      try { img.src = await blobUrl(f); } catch(e) { fig.textContent = f.name + " (nicht darstellbar)"; fig.style.padding = "16px"; }
+    };
+    const src = thumb(f, 1600);
+    if (src) img.src = src; else img.onerror();
+    fig.appendChild(img);
+    fig.onclick = () => openLB(idx);
+    frag.appendChild(fig);
+  }
+  $("gallery").appendChild(frag);
+}
+
+new IntersectionObserver(es => { if (es[0].isIntersecting) loadMore(); }, { rootMargin: "1200px" })
+  .observe($("sentinel"));
+
+/* ---------- Vollbild-Ansicht ---------- */
+let cur = 0, lbShow = 0;
+const lb = $("lb"), lbImg = $("lbImg");
+
+function openLB(i){
+  cur = i; lb.hidden = false; document.body.style.overflow = "hidden";
+  history.pushState({ lb:1 }, "");
+  showLB();
+}
+function closeLB(){
+  if (lb.hidden) return;
+  if (history.state && history.state.lb) history.back(); else hideLB();
+}
+function hideLB(){ lb.hidden = true; lbImg.removeAttribute("src"); document.body.style.overflow = ""; }
+window.addEventListener("popstate", () => { if (!lb.hidden) hideLB(); });
+
+function showLB(){
+  const f = items[cur], my = ++lbShow;
+  $("lbCount").textContent = (cur+1) + " / " + items.length + (nextPage ? "+" : "");
+  $("lbSpin").hidden = false;
+  lbImg.onload = () => { if (my === lbShow) $("lbSpin").hidden = true; };
+  lbImg.onerror = async () => {
+    lbImg.onerror = null;
+    try { const u = await blobUrl(f); if (my === lbShow) lbImg.src = u; }
+    catch(e) { $("lbSpin").hidden = true; }
+  };
+  const src = thumb(f, 2560);
+  if (src) lbImg.src = src; else lbImg.onerror();
+  /* Nachbarn vorladen */
+  [cur+1, cur-1].forEach(n => { if (items[n]) { const s = thumb(items[n], 2560); if (s) new Image().src = s; } });
+  if (cur >= items.length - 3 && nextPage) loadMore();
+}
+function step(d){
+  const n = cur + d;
+  if (n < 0 || n >= items.length) return;
+  cur = n; showLB();
+}
+
+$("lbClose").onclick = e => { e.stopPropagation(); closeLB(); };
+let tx = 0, ty = 0, multi = false, swiped = false;
+lb.addEventListener("touchstart", e => {
+  multi = e.touches.length > 1 || (window.visualViewport && visualViewport.scale > 1.01);
+  tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+}, { passive:true });
+lb.addEventListener("touchend", e => {
+  if (multi) return;
+  const t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+    swiped = true; setTimeout(() => swiped = false, 350);
+    step(dx < 0 ? 1 : -1);
+  }
+}, { passive:true });
+lb.addEventListener("click", () => {
+  if (swiped) return;
+  if (window.visualViewport && visualViewport.scale > 1.01) return;
+  closeLB();
+});
+document.addEventListener("keydown", e => {
+  if (lb.hidden) return;
+  if (e.key === "Escape") closeLB();
+  else if (e.key === "ArrowRight") step(1);
+  else if (e.key === "ArrowLeft") step(-1);
+});
+
+start();
+</script>
+<script src="https://accounts.google.com/gsi/client" async defer onload="onGis()"></script>
+</body>
+</html>
